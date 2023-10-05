@@ -574,8 +574,10 @@ public abstract class MeterRegistry {
             @Nullable DistributionStatisticConfig config, BiFunction<Meter.Id, DistributionStatisticConfig, M> builder,
             Function<Meter.Id, M> noopBuilder) {
         Id mappedId = getMappedId(id);
-        Meter m = getOrCreateMeter(config, builder, id, mappedId, noopBuilder);
-
+        Meter m = meterMap.get(mappedId);
+        if (m == null) {
+            m = getOrCreateMeter(config, builder, id, mappedId, noopBuilder);
+        }
         if (!meterClass.isInstance(m)) {
             throw new IllegalArgumentException(
                     format("There is already a registered meter of a different type (%s vs. %s) with the same name: %s",
@@ -598,43 +600,41 @@ public abstract class MeterRegistry {
     private Meter getOrCreateMeter(@Nullable DistributionStatisticConfig config,
             BiFunction<Id, /* Nullable Generic */ DistributionStatisticConfig, ? extends Meter> builder, Id originalId,
             Id mappedId, Function<Meter.Id, ? extends Meter> noopBuilder) {
-        Meter m = meterMap.get(mappedId);
 
-        if (m == null) {
-            if (isClosed()) {
-                return noopBuilder.apply(mappedId);
-            }
+        if (isClosed()) {
+            return noopBuilder.apply(mappedId);
+        }
 
-            synchronized (meterMapLock) {
-                m = meterMap.get(mappedId);
+        Meter m;
+        synchronized (meterMapLock) {
+            m = meterMap.get(mappedId);
 
-                if (m == null) {
-                    if (!accept(mappedId)) {
-                        return noopBuilder.apply(mappedId);
-                    }
+            if (m == null) {
+                if (!accept(mappedId)) {
+                    return noopBuilder.apply(mappedId);
+                }
 
-                    if (config != null) {
-                        for (MeterFilter filter : filters) {
-                            DistributionStatisticConfig filteredConfig = filter.configure(mappedId, config);
-                            if (filteredConfig != null) {
-                                config = filteredConfig;
-                            }
+                if (config != null) {
+                    for (MeterFilter filter : filters) {
+                        DistributionStatisticConfig filteredConfig = filter.configure(mappedId, config);
+                        if (filteredConfig != null) {
+                            config = filteredConfig;
                         }
                     }
-
-                    m = builder.apply(mappedId, config);
-
-                    Id synAssoc = mappedId.syntheticAssociation();
-                    if (synAssoc != null) {
-                        Set<Id> associations = syntheticAssociations.computeIfAbsent(synAssoc, k -> new HashSet<>());
-                        associations.add(mappedId);
-                    }
-
-                    for (Consumer<Meter> onAdd : meterAddedListeners) {
-                        onAdd.accept(m);
-                    }
-                    meterMap.put(mappedId, m);
                 }
+
+                m = builder.apply(mappedId, config);
+
+                Id synAssoc = mappedId.syntheticAssociation();
+                if (synAssoc != null) {
+                    Set<Id> associations = syntheticAssociations.computeIfAbsent(synAssoc, k -> new HashSet<>());
+                    associations.add(mappedId);
+                }
+
+                for (Consumer<Meter> onAdd : meterAddedListeners) {
+                    onAdd.accept(m);
+                }
+                meterMap.put(mappedId, m);
             }
         }
 
